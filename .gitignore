@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime state, logs and secrets - never commit these
+*.log
+*.pid
+*.sock
+status.json
+ipc.token
+*.token
+.env
+.env.*
+!.env.example
+config/config.local.yaml
+config/config.yaml
+data/
+logs/
+run/
+backups/
+
+# Packaging / editor / OS
+*.tar.gz
+*.zip
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local assistant workspace, not part of the shipped project
+.workbuddy-ai/
+
+# Local throwaway test VM (QEMU program + disk image + cloud-init seed) - never commit
+.vm/
+
+# Personal release notes / launch checklist - not part of the shipped project
+launch-kit/

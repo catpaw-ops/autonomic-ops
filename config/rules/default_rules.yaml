@@ -1,0 +1,244 @@
+# =============================================================================
+# AutonomicOps 默认规则库
+#
+# 规则语义：when 命中 finding -> then 生成 ActionRequest -> 策略门判定
+#   * 白名单 + 风险 <= max_auto_risk + auto_remediate=true 才会自动执行
+#   * 其余一律转 pending 提案，等待 CLI 审批
+# 因此“规则存在”不等于“会自动执行”，执行权始终在策略层。
+#
+# 可用模板变量：{{target}} {{value}} {{severity}} {{host}} {{finding_id}}
+#               {{evidence.<path>}}
+# =============================================================================
+version: 1
+
+defaults:
+  enabled: true
+  cooldown: 300
+  max_attempts: 3
+  min_severity: medium
+  priority: 55
+
+rules:
+  # ---------------------------------------------------------------------------
+  # 1. 进程/服务存活
+  # ---------------------------------------------------------------------------
+  - id: core.restart-absent-process
+    name: 进程异常退出 -> 自动重启
+    description: 被监控进程消失时，按 remediation.processes 配置重启并做健康检查
+    when:
+      kind: process.absent
+      min_severity: high
+    then:
+      action: process.restart
+      risk: medium
+      params:
+        service: "{{target}}"
+        verify_delay: 3
+    cooldown: 600
+    max_attempts: 3
+
+  - id: core.restart-inactive-unit
+    name: systemd 单元掉线 -> 自动拉起
+    when:
+      kind: unit.inactive
+      min_severity: high
+    then:
+      action: service.restart
+      risk: medium
+      params:
+        service: "{{target}}"
+        unit: "{{target}}"
+        verify_delay: 3
+    cooldown: 600
+    max_attempts: 3
+
+  - id: core.web-service-repair
+    name: Web 服务端口异常 -> 修复
+    description: 仅匹配明确的 web 服务名，避免误重启数据库等关键服务
+    when:
+      kind: port.closed
+      target_regex: "^(web|nginx|httpd|apache|php-fpm|gunicorn|uwsgi)$"
+      min_severity: high
+    then:
+      action: process.restart
+      risk: medium
+      params:
+        service: "{{target}}"
+        verify_delay: 3
+        timeout: 45
+    cooldown: 900
+    max_attempts: 2
+
+  - id: core.port-down-diagnose
+    name: 其他端口关闭 -> 诊断（不自动重启）
+    when:
+      kind: port.closed
+      min_severity: medium
+    then:
+      action: diagnostic
+      risk: low
+      params:
+        reason: "port {{target}} closed"
+    cooldown: 900
+    max_attempts: 1
+
+  # ---------------------------------------------------------------------------
+  # 2. 磁盘
+  # ---------------------------------------------------------------------------
+  - id: core.disk-cleanup-critical
+    name: 磁盘使用率 critical -> 清理过期文件
+    description: 只在 policy.cleanup_paths 内删除超过 N 小时的文件，先快照后删除，可一键回滚
+    when:
+      kind: disk.high
+      min_severity: critical
+    then:
+      action: disk.cleanup
+      risk: medium
+      params:
+        min_age_hours: 48
+        max_files: 500
+        max_bytes: 2147483648
+    cooldown: 1800
+    max_attempts: 2
+
+  - id: core.disk-warn-diagnose
+    name: 磁盘使用率告警 -> 诊断与通知
+    when:
+      kind: disk.high
+      min_severity: high
+    then:
+      action: diagnostic
+      risk: low
+      params:
+        reason: "disk pressure on {{target}} at {{value}}%"
+    cooldown: 1800
+    max_attempts: 1
+
+  # ---------------------------------------------------------------------------
+  # 3. 资源压力
+  # ---------------------------------------------------------------------------
+  - id: core.memory-pressure-cleanup
+    name: 内存 critical -> 清理临时/缓存文件
+    when:
+      kind: memory.high
+      min_severity: critical
+    then:
+      action: cache.cleanup
+      risk: medium
+      params:
+        min_age_hours: 24
+        max_files: 300
+    cooldown: 1800
+    max_attempts: 2
+
+  - id: core.load-critical-diagnose
+    name: 负载 critical -> 采集现场
+    when:
+      kind: load.high
+      min_severity: critical
+    then:
+      action: diagnostic
+      risk: low
+      params:
+        reason: "load {{value}} on {{host}}"
+    cooldown: 900
+    max_attempts: 2
+
+  # ---------------------------------------------------------------------------
+  # 4. 安全
+  # ---------------------------------------------------------------------------
+  - id: sec.ssh-bruteforce-ban
+    name: SSH 暴力破解 -> 封禁来源 IP
+    description: 默认进入审批队列；开启 security.auto_ban 且白名单包含 firewall.ban_ip 才自动执行
+    when:
+      kind: ssh.bruteforce
+      min_severity: high
+    then:
+      action: firewall.ban_ip
+      risk: high
+      params:
+        duration: 3600
+    cooldown: 600
+    max_attempts: 2
+
+  - id: sec.conn-flood-ban
+    name: 单 IP 连接洪泛 -> 封禁来源 IP
+    when:
+      kind: conn.flood
+      min_severity: high
+    then:
+      action: firewall.ban_ip
+      risk: high
+      params:
+        duration: 1800
+    cooldown: 600
+    max_attempts: 2
+
+  - id: sec.misconfig-notify
+    name: 不安全配置 -> 通知（不自动修改）
+    description: 修改 sshd/sudoers 属于高风险，永远只出方案等人工确认
+    when:
+      kind: security.misconfig
+      min_severity: low
+    then:
+      action: notify
+      risk: low
+      params:
+        message: "{{target}}: {{value}}"
+    cooldown: 86400
+    max_attempts: 1
+
+  - id: sec.traffic-spike-diagnose
+    name: 流量异常 -> 诊断
+    when:
+      kind: traffic.high
+      min_severity: medium
+    then:
+      action: diagnostic
+      risk: low
+      params:
+        reason: "traffic {{value}} Mbps on {{host}}"
+    cooldown: 600
+    max_attempts: 1
+
+  # ---------------------------------------------------------------------------
+  # 5. 插件生态示例规则（插件可自带规则，也可在此集中声明）
+  # ---------------------------------------------------------------------------
+  - id: plugin.log-error-spike-notify
+    name: 日志错误突增 -> 通知
+    when:
+      kind: log.error_spike
+      min_severity: medium
+    then:
+      action: notify
+      risk: low
+      params:
+        message: "{{target}} error spike: {{value}}"
+    cooldown: 900
+    max_attempts: 1
+
+  - id: plugin.cert-expiring-notify
+    name: 证书即将过期 -> 通知
+    when:
+      kind: cert.expiring
+      min_severity: high
+    then:
+      action: notify
+      risk: low
+      params:
+        message: "certificate {{target}} expires in {{value}} days"
+    cooldown: 86400
+    max_attempts: 1
+
+  - id: plugin.backup-stale-notify
+    name: 备份过期 -> 通知
+    when:
+      kind: backup.stale
+      min_severity: medium
+    then:
+      action: notify
+      risk: low
+      params:
+        message: "backup freshness: {{target}} {{value}}"
+    cooldown: 21600
+    max_attempts: 1

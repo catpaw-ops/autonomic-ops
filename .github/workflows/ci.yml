@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-and-unit:
+    name: Static + unit (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Compile Python sources
+        run: python -m compileall -q src
+
+      - name: Check shell script syntax
+        run: bash -n scripts/*.sh tests/*.sh
+
+      - name: Parse and validate bundled configuration templates
+        run: |
+          PYTHONPATH=src python - <<'PY'
+          from autonomic.config import load_config
+
+          for path in ("config/config.example.yaml",):
+              cfg = load_config(path)
+              print("ok:", path, "prefix =", cfg.get("agent.prefix"))
+          PY
+
+      - name: Unit tests without PyYAML (zero-dependency path)
+        run: |
+          python -c "import sys, unittest; sys.modules['yaml'] = None; \
+          suite = unittest.defaultTestLoader.discover('tests', pattern='test_*.py'); \
+          sys.exit(0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1)"
+
+      - name: Unit tests with PyYAML
+        run: |
+          python -m pip install "PyYAML>=5.4"
+          PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Verify the package installs and exposes console scripts
+        run: |
+          python -m pip install -e . --no-deps
+          python -c "import autonomic; print('installed version:', autonomic.VERSION)"
+
+# The end-to-end self-test (tests/selftest.sh) is intentionally NOT run in CI:
+# it boots a real daemon, needs Unix sockets, /proc, systemctl and firewall
+# tooling, and writes under /tmp/autonomic-selftest. Run it on a disposable
+# Linux VM or VPS instead - see docs/DEPLOYMENT.md.

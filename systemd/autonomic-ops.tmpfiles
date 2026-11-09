@@ -1,0 +1,3 @@
+d /var/lib/autonomic-ops 0750 root root -
+d /var/log/autonomic-ops 0750 root root -
+d /run/autonomic-ops 0750 root root -

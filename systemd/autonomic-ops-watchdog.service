@@ -1,0 +1,15 @@
+[Unit]
+Description=AutonomicOps external watchdog (optional second layer)
+After=autonomic-ops.service
+Requires=autonomic-ops.service
+
+[Service]
+Type=simple
+ExecStart=/opt/autonomic-ops/scripts/watchdog.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

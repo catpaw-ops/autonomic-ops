@@ -1,0 +1,252 @@
+# =============================================================================
+# AutonomicOps 配置文件模板
+# 安装时复制为 /opt/autonomic-ops/config/config.yaml，然后按需修改。
+# 所有相对路径都以 agent.prefix 为基准；支持 ${ENV_VAR} 与 ${ENV_VAR:-默认值}。
+# 修改后无需重启：CLI 执行 `autonomic-ops config reload` 即可热加载大部分配置。
+# =============================================================================
+
+agent:
+  name: autonomic-ops
+  node_id: ""                        # 留空 = 使用 hostname
+  prefix: /opt/autonomic-ops
+  data_dir: /var/lib/autonomic-ops
+  log_dir: /var/log/autonomic-ops
+  run_dir: /run/autonomic-ops
+  socket: ""                         # 留空 = run_dir/agent.sock
+  pidfile: ""                        # 留空 = run_dir/agent.pid
+  log_level: INFO                    # DEBUG / INFO / WARNING / ERROR
+  log_max_bytes: 10485760
+  log_backups: 5
+  task_journal: true                 # 任务状态落盘，重启后可恢复未完成任务
+  status_refresh: 5
+  shutdown_grace: 10
+  require_root_for_privileged: true  # 无 root 时自动降级而非报错退出
+  allow_private_deploy: false
+
+scheduler:
+  workers: 4                         # Worker 数量（小弟数量），可 CLI 动态调整
+  max_workers: 16
+  tick_interval: 0.5
+  queue_max: 200
+  default_task_timeout: 120
+  max_task_timeout: 1800
+  default_cpu_seconds: 300
+  default_memory_mb: 512
+  aging_rate: 0.25                   # 每秒为等待任务增加的等效优先级
+  aging_cap: 25                      # 老化上限，防止低优先级任务饿死
+  preemption: true
+  preempt_threshold: 15              # 新任务需高出运行任务多少优先级才抢占
+  preempt_requeue_limit: 2
+  dedupe_window: 30
+  journal_max_entries: 500
+  max_actions_per_minute: 30
+
+policy:
+  # 总开关：关闭后任何自动处置都只生成提案，等待 CLI 人工确认
+  auto_remediate: true
+  # 演练模式：允许自动处置流程，但执行器只模拟、不真正改系统
+  dry_run: false
+  max_auto_risk: medium              # low/medium/high/critical；超过此级别一律转人工
+  critical_always_approval: true
+  core_self_modify: false            # 核心调度代码禁止自修改；扩展请写插件
+
+  # 自动处置白名单：只有在此列表内、且风险不超过 max_auto_risk 的动作才会自动执行
+  whitelist:
+    - process.restart
+    - service.restart
+    - disk.cleanup
+    - log.rotate
+    - cache.cleanup
+    - plugin.action
+
+  # 无论风险等级如何，这些动作永远需要人工确认
+  approval_required:
+    - firewall.ban_ip
+    - file.delete
+    - system.config.modify
+    - sudo.modify
+    - plugin.install
+    - code.patch
+    - package.install
+    - shell.exec
+
+  # 硬禁止路径：连人工确认也不允许自动写入（如需修改只能改此配置本身）
+  forbidden_paths:
+    - /boot
+    - /dev
+    - /proc
+    - /sys
+    - /etc/sudoers
+    - /etc/sudoers.d
+    - /etc/passwd
+    - /etc/shadow
+    - /etc/ssh/sshd_config
+    - /etc/systemd/system
+
+  # 磁盘清理只允许在这些根目录内删文件（先快照后删除，可一键回滚）。
+  # 注意：若 systemd 单元启用了 PrivateTmp=yes（默认开启），代理进程看到的
+  # /tmp 与 /var/tmp 是独立的私有挂载命名空间，看不到宿主机上的真实文件，因此
+  # 这里不要配置 /tmp 或 /var/tmp，应指向真实可见且可写的业务缓存/日志目录。
+  cleanup_paths:
+    - /var/log
+    - /var/cache
+  cleanup_min_age_hours: 48
+  cleanup_max_files: 500
+  cleanup_max_bytes: 2147483648
+
+  allow_unsigned_plugins: true
+
+  # 对话/远程下发的 shell 命令：只读白名单直接执行，其余转人工
+  shell_allowlist:
+    - uptime
+    - "df "
+    - free
+    - date
+    - whoami
+    - id
+    - hostname
+    - systemctl status
+    - "journalctl -n"
+    - "ss -"
+    - "du "
+    - "ls "
+    - "cat /proc/loadavg"
+    - "python3 -V"
+    - uname
+
+  shell_forbidden_patterns:
+    - "rm\\s+-rf\\s+/"
+    - mkfs
+    - "dd\\s+if="
+    - ":\\(\\)\\s*\\{"
+    - shutdown
+    - reboot
+    - "iptables\\s+-F"
+    - "chmod\\s+777\\s+/etc"
+    - "\\bsudo\\b"
+    - "curl\\s*[^|]*\\|\\s*(sh|bash)"
+    - ">\\s*/dev/sd"
+    - "/etc/sudoers"
+
+metrics:
+  enabled: true
+  interval: 10
+  disk_paths:
+    - /
+    - /var
+    - /tmp
+  watch_ports:
+    - host: 127.0.0.1
+      port: 22
+      name: ssh
+      critical: false
+  watch_processes: []                    # 例：- name: nginx / match: "nginx: master"
+  watch_units: []                        # systemd 单元名，systemd 在线时生效
+  load_warn: 4.0
+  load_critical: 8.0
+  mem_warn_percent: 85
+  mem_critical_percent: 95
+  disk_warn_percent: 80
+  disk_critical_percent: 92
+  traffic_warn_mbps: 100
+  conn_per_ip_threshold: 100
+  ssh_log_paths:
+    - /var/log/auth.log
+    - /var/log/secure
+  ssh_fail_threshold: 5
+  ssh_fail_window: 600
+  auth_log_max_bytes: 4194304
+  sustained_samples: 3
+  top_n: 10
+
+security:
+  ids_enabled: true
+  auto_ban: false                 # 默认关闭自动封禁：开启前请确认 firewall_backend 与白名单
+  ban_requires_approval: true
+  firewall_backend: auto          # auto | nft | iptables | recorder
+  ban_duration: 3600
+  max_bans_per_hour: 50
+  protect_private_ips: true       # 绝不封禁回环/内网/本机 IP（防自锁）
+  config_audit: true
+  ssh_config_path: /etc/ssh/sshd_config
+  expose_check_ports:
+    - 22
+    - 3306
+    - 6379
+    - 27017
+
+backup:
+  enabled: true
+  dir: ""                         # 留空 = data_dir/backups
+  max_snapshots: 300
+  retention_days: 7
+  max_file_bytes: 52428800
+  max_total_bytes: 536870912
+  auto_rollback_on_failure: true
+
+audit:
+  enabled: true
+  file: ""                        # 留空 = log_dir/audit.log
+  max_bytes: 33554432
+  backups: 5
+  chain: true                     # 哈希链，防篡改
+
+plugins:
+  enabled: true
+  dirs:                           # 插件目录，可多个；支持热加载
+    - /opt/autonomic-ops/plugins/builtin
+  hot_reload: true
+  scan_interval: 5
+  error_disable_threshold: 5
+  allow_install: true
+  max_plugin_bytes: 524288
+  state_file: ""
+
+chat:
+  enabled: true
+  default_priority: 70
+  max_message_bytes: 16384
+  history_limit: 200
+  session_file: ""
+
+codegen:
+  enabled: true
+  max_artifact_bytes: 262144
+  sandbox_run: true
+  sandbox_timeout: 10
+  sandbox_cpu_seconds: 10
+  sandbox_memory_mb: 256
+  allow_network_in_sandbox: false
+  templates_dir: ""
+  require_approval_for_system_files: true
+  core_manifest: ""
+
+notify:
+  webhook_url: ""                 # 可选：notify.webhook 动作会把事件 POST 到这个 URL（钉钉/飞书/Slack 机器人地址）
+
+bootstrap:
+  enabled: true
+  authorization_token: ""         # 远程初始化必须提供的一次性授权令牌，建议安装时随机生成
+  install_root: /opt/autonomic-ops
+  ssh_user: root
+  ssh_port: 22
+  connect_timeout: 15
+  command_timeout: 180
+  allow_private: false            # 是否允许部署到内网 IP
+  strict_host_key: true
+  simulate_root: ""
+  package_excludes:
+    - data
+    - logs
+    - .git
+    - __pycache__
+    - "*.pyc"
+
+watchdog:
+  enabled: true
+  interval: 10
+  heartbeat_timeout: 45
+  max_rss_mb: 1024
+  max_fd: 4096
+  restart_exit_code: 99
+  core_integrity_interval: 60

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autonomic-ops"
+version = "1.0.0"
+description = "An unattended, policy-gated self-healing operations agent for single Linux hosts"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "AutonomicOps contributors" }]
+keywords = ["ops", "self-healing", "monitoring", "linux", "automation", "agent"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: No Input/Output (Daemon)",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
+]
+# The runtime has no third-party dependencies at all. When PyYAML is absent,
+# src/autonomic/yamlmini.py parses the YAML subset used by our config files.
+dependencies = []
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=5.4"]
+dev = ["PyYAML>=5.4"]
+
+[project.scripts]
+autonomic-ops = "autonomic.cli:main"
+autonomic-opsd = "autonomic.main:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["autonomic*"]

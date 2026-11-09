@@ -1,0 +1,242 @@
+# =============================================================================
+# AutonomicOps 自测配置（仅用于 tests/selftest.sh，不要用于生产）
+# 特点：所有路径落在 /tmp/autonomic-selftest 下；防火墙落 recorder 后端；
+#       自动处置打开但风险上限 high，用于验证“自动处置 + 审批 + 回滚”整条链路。
+#
+# 可移植性：本文件不引用任何开发者本机路径。tests/selftest.sh 会在启动前把
+#   plugins/builtin 与 config/rules 复制到 /tmp/autonomic-selftest 下，并注入
+#   一次性令牌环境变量 AUTONOMIC_SELFTEST_TOKEN（bootstrap 用）。
+#   不要手动把本配置用于生产：它刻意放开了自动封禁与 high 风险自动处置。
+# =============================================================================
+agent:
+  name: autonomic-selftest
+  node_id: selftest-node
+  prefix: /tmp/autonomic-selftest/prefix
+  data_dir: /tmp/autonomic-selftest/data
+  log_dir: /tmp/autonomic-selftest/logs
+  run_dir: /tmp/autonomic-selftest/run
+  socket: /tmp/autonomic-selftest/run/agent.sock
+  pidfile: /tmp/autonomic-selftest/run/agent.pid
+  log_level: DEBUG
+  log_max_bytes: 5242880
+  log_backups: 3
+  shutdown_grace: 10
+  require_root_for_privileged: false
+
+scheduler:
+  workers: 2
+  max_workers: 8
+  tick_interval: 0.3
+  queue_max: 50
+  default_task_timeout: 120
+  max_task_timeout: 600
+  default_cpu_seconds: 300
+  default_memory_mb: 512
+  aging_rate: 0.25
+  aging_cap: 25
+  preemption: true
+  preempt_threshold: 15
+  preempt_requeue_limit: 2
+  dedupe_window: 30
+  journal_max_entries: 200
+  max_actions_per_minute: 30
+
+policy:
+  auto_remediate: true
+  dry_run: false
+  max_auto_risk: high
+  critical_always_approval: true
+  core_self_modify: false
+  whitelist:
+    - process.restart
+    - service.restart
+    - disk.cleanup
+    - log.rotate
+    - cache.cleanup
+    - plugin.action
+    - diagnostic
+    - notify
+    - firewall.ban_ip
+  approval_required:
+    - file.delete
+    - system.config.modify
+    - sudo.modify
+    - plugin.install
+    - code.patch
+    - package.install
+    - shell.exec
+  forbidden_paths:
+    - /boot
+    - /dev
+    - /proc
+    - /sys
+    - /etc/sudoers
+    - /etc/sudoers.d
+    - /etc/passwd
+    - /etc/shadow
+    - /etc/ssh/sshd_config
+    - /etc/systemd/system
+    - /tmp/autonomic-selftest/data/core
+  cleanup_paths:
+    - /tmp/autonomic-selftest/cleanup
+  cleanup_min_age_hours: 2
+  cleanup_max_files: 100
+  cleanup_max_bytes: 10485760
+  shell_allowlist:
+    - uptime
+    - df
+    - free
+    - date
+    - whoami
+    - id
+    - hostname
+    - systemctl status
+    - journalctl -n
+    - ss -
+    - du
+    - ls
+    - cat /proc/loadavg
+    - python3 -V
+    - uname
+    - sleep
+  shell_forbidden_patterns:
+    - "rm -rf /"
+    - "mkfs"
+    - "dd if="
+    - ":(){"
+    - "shutdown"
+    - "reboot"
+    - "sudo"
+    - "chmod 777 /"
+    - "iptables -F"
+    - "curl | sh"
+    - "wget | sh"
+    - "> /dev/sda"
+
+metrics:
+  interval: 3
+  disk_paths:
+    - /tmp
+  watch_ports:
+    - host: 127.0.0.1
+      port: 65001
+      name: web
+      critical: true
+  watch_processes:
+    # Healthy-branch probe: the watched process must exist on whatever host
+    # runs the self-test. PID 1's comm differs between containers (dumb-init),
+    # systemd hosts (systemd) and other init systems, so selftest.sh injects it
+    # via AUTONOMIC_SELFTEST_PROC_MATCH instead of hard-coding one host's name.
+    - name: present-proc
+      match: "${AUTONOMIC_SELFTEST_PROC_MATCH:-dumb-init}"
+      critical: false
+  watch_units: []
+  load_warn: 4.0
+  load_critical: 8.0
+  mem_warn_percent: 85
+  mem_critical_percent: 95
+  disk_warn_percent: 80
+  disk_critical_percent: 92
+  traffic_warn_mbps: 100
+  conn_per_ip_threshold: 100
+  ssh_log_paths:
+    - /tmp/autonomic-selftest/auth.log
+  ssh_fail_threshold: 5
+  ssh_fail_window: 600
+  ssh_success_threshold: 50
+  sustained_samples: 3
+
+security:
+  ids_enabled: true
+  auto_ban: true
+  ban_requires_approval: false
+  firewall_backend: recorder
+  ban_duration: 3600
+  max_bans_per_hour: 50
+  protect_private_ips: true
+  ssh_config_path: /etc/ssh/sshd_config
+  expose_check_ports:
+    - 22
+    - 3306
+    - 6379
+
+backup:
+  enabled: true
+  dir: /tmp/autonomic-selftest/backups
+  max_snapshots: 50
+  retention_days: 7
+  max_file_bytes: 52428800
+  max_total_bytes: 536870912
+  auto_rollback_on_failure: true
+
+audit:
+  file: /tmp/autonomic-selftest/logs/audit.log
+  max_bytes: 8388608
+  backups: 3
+  chain: true
+
+plugins:
+  dirs:
+    - /tmp/autonomic-selftest/plugins/builtin
+    - /tmp/autonomic-selftest/plugins/user
+  hot_reload: true
+  scan_interval: 3
+  error_disable_threshold: 5
+  max_plugin_bytes: 524288
+  settings:
+    log_error_spike:
+      path: /tmp/autonomic-selftest/app.log
+      threshold: 10
+      window_bytes: 65536
+    hello_watch:
+      marker: /tmp/autonomic-selftest/hello.marker
+    backup_freshness:
+      max_age_hours: 48
+
+chat:
+  default_priority: 70
+  max_message_bytes: 16384
+  history_limit: 50
+  session_file: /tmp/autonomic-selftest/chat.jsonl
+
+codegen:
+  max_artifact_bytes: 262144
+  sandbox_run: true
+  sandbox_timeout: 10
+  sandbox_cpu_seconds: 10
+  sandbox_memory_mb: 256
+  require_approval_for_system_files: true
+
+bootstrap:
+  enabled: true
+  authorization_token: "${AUTONOMIC_SELFTEST_TOKEN:-}"
+  install_root: /tmp/autonomic-selftest/remote-prefix
+  ssh_user: root
+  ssh_port: 22
+  allow_private: true
+  strict_host_key: false
+  simulate_root: /tmp/autonomic-selftest/simulated
+  command_timeout: 120
+
+watchdog:
+  enabled: true
+  interval: 3
+  heartbeat_timeout: 45
+  max_rss_mb: 512
+  max_fd: 2048
+  restart_exit_code: 99
+  core_integrity_interval: 60
+
+rules:
+  path: /tmp/autonomic-selftest/rules
+  reload_interval: 5
+
+remediation:
+  max_restarts_per_hour: 5
+  default_verify_delay: 1.0
+  processes:
+    web:
+      command: "nohup python3 -m http.server 65001 --bind 127.0.0.1 >/tmp/autonomic-selftest/web.log 2>&1 &"
+      match: "http.server 65001"
+      health_host: 127.0.0.1
+      health_port: 65001

@@ -1,0 +1,63 @@
+[Unit]
+Description=AutonomicOps - unattended operations agent (scheduler + worker pool)
+Documentation=file:///opt/autonomic-ops/README.md
+After=network-online.target
+Wants=network-online.target
+# The optional external watchdog (autonomic-ops-watchdog.service) Requires=
+# this unit, so it must be allowed to run alongside us. Declaring Conflicts=
+# here made systemd produce unmergeable stop/start jobs and prevented the
+# second-layer supervisor from ever being enabled.
+
+[Service]
+# The daemon is the *only* long-lived process. It never writes to the tty:
+# all channels go to $PREFIX/logs/*.log, stdout/stderr fall back to journal.
+Type=simple
+ExecStart=/opt/autonomic-ops/bin/autonomic-ops-daemon --config /opt/autonomic-ops/config/config.yaml --no-daemon
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# Host-level safety net, complementary to the per-task rlimits in sandbox.py.
+# Keep MemoryMax above watchdog.max_rss_mb (default 1024MB), otherwise the
+# watchdog's own emergency exit would restart the service in a loop.
+LimitNOFILE=65536
+LimitNPROC=512
+MemoryMax=2G
+TasksMax=256
+
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+# --- hardening -------------------------------------------------------------
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=false
+ProtectControlGroups=false
+# systemd creates the state/log/runtime dirs and makes them writable under
+# ProtectSystem=full. RuntimeDirectory lives on tmpfs and is recreated on every
+# boot, which is why it must be declared here instead of being created once by
+# the installer: a ReadWritePaths entry pointing at a missing /run/autonomic-ops
+# (or /var/log/autonomic-ops) makes systemd fail mount-namespace setup with
+# 226/NAMESPACE, so the service restart-loops after a reboot.
+StateDirectory=autonomic-ops
+LogsDirectory=autonomic-ops
+RuntimeDirectory=autonomic-ops
+ReadWritePaths=/opt/autonomic-ops/data /opt/autonomic-ops/logs
+RestrictSUIDSGID=true
+LockPersonality=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=autonomic-ops
+
+# Run as root by default: remediation needs systemctl / iptables / file cleanup.
+# To run unprivileged, create a user and uncomment the next two lines, then grant
+# narrowly-scoped sudo rights (see docs/USAGE.md).
+#User=autonomic
+#Group=autonomic
+
+[Install]
+WantedBy=multi-user.target
